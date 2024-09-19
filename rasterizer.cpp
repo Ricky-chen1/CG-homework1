@@ -132,45 +132,64 @@ void rst::rasterizer::draw(pos_buf_id pos_buffer, ind_buf_id ind_buffer, col_buf
 
 //Screen space rasterization
 void rst::rasterizer::rasterize_triangle(const Triangle& t) {
-    // 获得三角形顶点
+    // 获取三角形的顶点
     auto v = t.toVector4();
     
-    // Find out the bounding box of current triangle.
-    // iterate through the pixel and find if the current pixel is inside the triangle
-    // 找到包围盒的边界
+    // 得到bounding box边界
     float minX = std::min({v[0].x(), v[1].x(), v[2].x()});
     float maxX = std::max({v[0].x(), v[1].x(), v[2].x()});
     float minY = std::min({v[0].y(), v[1].y(), v[2].y()});
     float maxY = std::max({v[0].y(), v[1].y(), v[2].y()});
 
-    // If so, use the following code to get the interpolated z value.
-
-    // 遍历包围盒内的所有像素
     for (int x = std::floor(minX); x <= std::ceil(maxX); ++x) {
         for (int y = std::floor(minY); y <= std::ceil(maxY); ++y) {
-            // 检查像素中心是否在三角形内部
-            if (insideTriangle(x + 0.5f, y + 0.5f, t.v)) {
-                // 计算插值的深度值
-                float alpha, beta, gamma;
-                std::tie(alpha, beta, gamma) = computeBarycentric2D(x + 0.5f, y + 0.5f, t.v);
-                
-                // 插值计算
-                float w_reciprocal = 1.0 / (alpha / v[0].w() + beta / v[1].w() + gamma / v[2].w());
-                float z_interpolated = alpha * v[0].z() / v[0].w() + beta * v[1].z() / v[1].w() + gamma * v[2].z() / v[2].w();
-                z_interpolated *= w_reciprocal;
+            // 每个像素的采样点
+            std::vector<Eigen::Vector2f> sample_list = {
+                {x + 0.25f, y + 0.25f}, {x + 0.75f, y + 0.25f},
+                {x + 0.25f, y + 0.75f}, {x + 0.75f, y + 0.75f}
+            };
 
-                // 深度缓冲比较
-                int index = get_index(x, y);
-                if (z_interpolated < depth_buf[index]) {
-                    // 如果当前点更靠近相机，更新帧缓冲和深度缓冲
-                    Vector3f color = t.getColor();
-                    set_pixel(Vector3f(x, y, 0), color);
-                    depth_buf[index] = z_interpolated;
+            // 遍历该像素的四个采样点
+            for (int i = 0; i < 4; i++) {
+                float sample_x = sample_list[i].x();
+                float sample_y = sample_list[i].y();
+                // 如果采样点在三角形内部
+                if (insideTriangle(sample_x, sample_y, t.v)) {
+                    // 插值法计算深度值
+                    float alpha, beta, gamma;
+                    std::tie(alpha, beta, gamma) = computeBarycentric2D(sample_x, sample_y, t.v);
+
+                    float w_reciprocal = 1.0 / (alpha / v[0].w() + beta / v[1].w() + gamma / v[2].w());
+                    float z_interpolated = alpha * v[0].z() / v[0].w() + beta * v[1].z() / v[1].w() + gamma * v[2].z() / v[2].w();
+                    z_interpolated *= w_reciprocal;
+
+                    int index = get_index(x, y);
+                    // 比较当前采样点的深度缓冲值并更新（z-buffer）
+                    if (z_interpolated < sample_depth_buf[index][i]) {
+                        sample_depth_buf[index][i] = z_interpolated;
+                        sample_color_buf[index][i] = t.getColor();
+                    }
                 }
             }
         }
     }
+
+    // 综合采样点的颜色
+    for (int x = std::floor(minX); x <= std::ceil(maxX); ++x) {
+        for (int y = std::floor(minY); y <= std::ceil(maxY); ++y) {
+            int index = get_index(x, y);
+            Eigen::Vector3f final_color(0, 0, 0);
+            // 平均采样点颜色
+            for (int i = 0; i < 4; i++) {
+                final_color += sample_color_buf[index][i];
+            }
+            final_color /= 4.0; // 4个采样点
+            // 使用set_pixel函数设置像素颜色
+            set_pixel(Eigen::Vector3f(x, y, 0), final_color);
+        }
+    }
 }
+
 
 void rst::rasterizer::set_model(const Eigen::Matrix4f& m)
 {
@@ -201,10 +220,13 @@ void rst::rasterizer::clear(rst::Buffers buff)
 
 rst::rasterizer::rasterizer(int w, int h) : width(w), height(h)
 {
+    // 单点采样时
     frame_buf.resize(w * h);
     depth_buf.resize(w * h);
 
-    // 初始化采样点深度缓冲
+    // 初始化每个像素的4个采样点深度缓冲和颜色缓冲
+    sample_depth_buf.resize(w * h, std::vector<float>(4, std::numeric_limits<float>::infinity()));
+    sample_color_buf.resize(w * h, std::vector<Eigen::Vector3f>(4, Eigen::Vector3f(0, 0, 0)));
 }
 
 int rst::rasterizer::get_index(int x, int y)

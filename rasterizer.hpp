@@ -96,8 +96,8 @@ namespace rst
         std::vector<Eigen::Vector3f> frame_buf;
         std::vector<float> depth_buf;
 
-        // 每个采样点的深度缓冲值
-        std::vector<std::vector<float>> sample_list;
+        std::vector<std::vector<float>> sample_depth_buf; // 每个像素的4个采样点深度
+        std::vector<std::vector<Eigen::Vector3f>> sample_color_buf; // 每个像素的4个采样点颜色
 
         int get_index(int x, int y);
 
